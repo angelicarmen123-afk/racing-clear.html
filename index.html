@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CRAZY RACING — Clear Edition</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Arial Bold', sans-serif; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #111; }
+canvas { display: block; width: 100%; height: 100%; }
+
+/* UI */
+.start-screen { position: absolute; inset: 0; background: rgba(0,0,0,0.95); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; }
+.title { font-size: 48px; font-weight: bold; color: #ffcc00; text-shadow: 3px 3px 0 #ff6600; margin-bottom: 10px; }
+.start-btn { padding: 20px 60px; font-size: 28px; background: #ffcc00; border: 4px solid #ff6600; border-radius: 12px; cursor: pointer; font-weight: bold; margin: 30px 0; }
+.start-btn:hover { background: #ffdd00; transform: scale(1.05); }
+.controls { color: #fff; font-size: 18px; line-height: 2; text-align: center; background: rgba(50,50,50,0.5); padding: 20px; border-radius: 10px; }
+.controls span { color: #ffcc00; font-weight: bold; font-size: 20px; }
+
+/* HUD */
+.hud { position: absolute; pointer-events: none; color: white; font-weight: bold; text-shadow: 2px 2px 0 #000; }
+.speed-box { bottom: 30px; left: 30px; background: rgba(0,0,0,0.7); padding: 20px 30px; border: 4px solid #ffcc00; border-radius: 10px; }
+.speed-num { font-size: 42px; color: #ffcc00; }
+.lap-box { top: 20px; right: 20px; background: rgba(0,0,0,0.7); padding: 15px 25px; border: 4px solid #44ff44; border-radius: 10px; font-size: 24px; color: #44ff44; }
+.time-box { top: 20px; left: 20px; background: rgba(0,0,0,0.7); padding: 15px 25px; border: 4px solid #44aaff; border-radius: 10px; font-size: 24px; color: #44aaff; }
+.boost-box { bottom: 30px; right: 30px; width: 200px; }
+.boost-label { color: #ff44ff; font-size: 16px; margin-bottom: 5px; }
+.boost-bar { height: 25px; background: #333; border: 3px solid #ff44ff; border-radius: 5px; overflow: hidden; }
+.boost-fill { height: 100%; background: linear-gradient(90deg, #ff44ff, #ff88ff); width: 0%; transition: width 0.1s; }
+.drift-text { position: absolute; bottom: 100px; right: 30px; color: #ff4444; font-size: 22px; font-weight: bold; opacity: 0; transition: opacity 0.2s; }
+.drift-text.on { opacity: 1; }
+</style>
+</head>
+<body>
+
+<!-- START SCREEN -->
+<div class="start-screen" id="startScreen">
+  <div class="title">🏎️ CRAZY RACING</div>
+  <div style="color:#aaa; font-size:20px;">Clear & Simple Version</div>
+  <button class="start-btn" id="startBtn">▶ START RACING</button>
+  <div class="controls">
+    <span>⬆️ UP</span> = Go Faster &nbsp;|&nbsp; <span>⬇️ DOWN</span> = Slow Down<br>
+    <span>⬅️ ➡️</span> = Steer Left / Right<br>
+    <span>SPACE</span> = Drift Around Corners<br>
+    <span>SHIFT</span> = Boost (when bar is full!)
+  </div>
+</div>
+
+<!-- GAME CANVAS -->
+<canvas id="gameCanvas"></canvas>
+
+<!-- HUD -->
+<div class="hud speed-box">
+  <div class="speed-num" id="speedNum">0</div>
+  <div style="color:#888; font-size:14px;">KM/H</div>
+</div>
+<div class="hud time-box">⏱ <span id="timeDisplay">00:00</span></div>
+<div class="hud lap-box">🏁 Lap <span id="lapDisplay">1</span>/3</div>
+<div class="hud drift-text" id="driftText">🔥 DRIFTING!</div>
+<div class="hud boost-box">
+  <div class="boost-label">⚡ BOOST</div>
+  <div class="boost-bar"><div class="boost-fill" id="boostFill"></div></div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const startScreen = document.getElementById('startScreen');
+const startBtn = document.getElementById('startBtn');
+const speedNum = document.getElementById('speedNum');
+const timeDisplay = document.getElementById('timeDisplay');
+const lapDisplay = document.getElementById('lapDisplay');
+const driftText = document.getElementById('driftText');
+const boostFill = document.getElementById('boostFill');
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+let gameRunning = false;
+let startTime = 0;
+
+// ========== CAR ==========
+const car = {
+  x: 0, z: 0,
+  angle: 0,
+  speed: 0,
+  maxSpeed: 10,
+  accel: 0.2,
+  friction: 0.97,
+  turnSpeed: 0.05,
+  drifting: false,
+  driftAngle: 0,
+  boost: 0,
+  boosting: false,
+  lap: 1,
+  checkpoint: 0,
+  color: '#ff3333'
+};
+
+const keys = {};
+
+// ========== TRACK ==========
+const TRACK_WIDTH = 200;
+const track = [];
+const obstacles = [];
+
+function makeTrack() {
+  track.length = 0;
+  const points = 50;
+  for (let i = 0; i < points; i++) {
+    const t = (i / points) * Math.PI * 2;
+    const wobble = Math.sin(t * 4) * 30;
+    track.push({
+      x: Math.sin(t) * (350 + wobble),
+      z: Math.cos(t) * (250 + wobble),
+      angle: t + Math.PI/2
+    });
+  }
+  // Obstacles
+  for (let i = 0; i < 12; i++) {
+    const idx = Math.floor(Math.random() * points);
+    const p = track[idx];
+    const side = Math.random() > 0.5 ? 1 : -1;
+    const offset = TRACK_WIDTH/2 - 40;
+    obstacles.push({
+      x: p.x + Math.cos(p.angle) * side * offset,
+      z: p.z - Math.sin(p.angle) * side * offset,
+      size: 30,
+      color: ['#ff9900', '#ffcc00', '#33aaff'][i % 3]
+    });
+  }
+}
+
+function findNearestIndex(x, z) {
+  let idx = 0, minD = Infinity;
+  for (let i = 0; i < track.length; i++) {
+    const d = Math.hypot(track[i].x - x, track[i].z - z);
+    if (d < minD) { minD = d; idx = i; }
+  }
+  return idx;
+}
+
+function onTrack(x, z) {
+  const idx = findNearestIndex(x, z);
+  const p = track[idx];
+  const d = Math.hypot(p.x - x, p.z - z);
+  return d < TRACK_WIDTH / 2;
+}
+
+// ========== DRAWING ==========
+function draw() {
+  const w = canvas.width, h = canvas.height;
+
+  // Sky & Ground
+  ctx.fillStyle = '#87CEEB';
+  ctx.fillRect(0, 0, w, h/2);
+  ctx.fillStyle = '#66bb66';
+  ctx.fillRect(0, h/2, w, h/2);
+
+  // Camera follows car
+  const camX = car.x, camZ = car.z;
+  const cos = Math.cos(-car.angle);
+  const sin = Math.sin(-car.angle);
+
+  function toScreen(wx, wz) {
+    const dx = wx - camX;
+    const dz = wz - camZ;
+    const rx = dx * cos - dz * sin;
+    const rz = dx * sin + dz * cos;
+    if (rz <= 0) return null;
+    const s = 350 / rz;
+    return { x: w/2 + rx * s, y: h/2 - rz * 0.2 * s, scale: s, rz };
+  }
+
+  // Draw road
+  for (let i = 0; i < track.length; i++) {
+    const p = track[i];
+    const n = track[(i+1) % track.length];
+    const perpX = Math.cos(p.angle);
+    const perpZ = -Math.sin(p.angle);
+
+    const pl = toScreen(p.x - perpX * TRACK_WIDTH/2, p.z - perpZ * TRACK_WIDTH/2);
+    const pr = toScreen(p.x + perpX * TRACK_WIDTH/2, p.z + perpZ * TRACK_WIDTH/2);
+    const nl = toScreen(n.x - Math.cos(n.angle) * TRACK_WIDTH/2, n.z + Math.sin(n.angle) * TRACK_WIDTH/2);
+    const nr = toScreen(n.x + Math.cos(n.angle) * TRACK_WIDTH/2, n.z - Math.sin(n.angle) * TRACK_WIDTH/2);
+
+    if (pl && pr && nl && nr) {
+      ctx.fillStyle = '#444';
+      ctx.beginPath();
+      ctx.moveTo(pl.x, pl.y);
+      ctx.lineTo(pr.x, pr.y);
+      ctx.lineTo(nr.x, nr.y);
+      ctx.lineTo(nl.x, nl.y);
+      ctx.fill();
+
+      // White edges
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(pl.x, pl.y); ctx.lineTo(nl.x, nl.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(pr.x, pr.y); ctx.lineTo(nr.x, nr.y); ctx.stroke();
+
+      // Start line
+      if (i === 0) {
+        ctx.fillStyle = '#fff';
+        for (let j = 0; j < 10; j++) {
+          if (j % 2 === 0) ctx.fillRect(pl.x + j*8, pl.y, 8, nl.y - pl.y);
+        }
+      }
+    }
+  }
+
+  // Draw obstacles
+  obstacles.forEach(obs => {
+    const s = toScreen(obs.x, obs.z);
+    if (s && s.y > 0 && s.y < h) {
+      const sz = obs.size * s.scale;
+      ctx.fillStyle = obs.color;
+      ctx.fillRect(s.x - sz/2, s.y - sz/2, sz, sz);
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(s.x - sz/2, s.y - sz/2, sz, sz);
+    }
+  });
+
+  // ========== BIG CLEAR CAR ==========
+  const carY = h - 100;
+  ctx.save();
+  ctx.translate(w/2, carY);
+  ctx.rotate(car.driftAngle * 0.3);
+
+  // Car shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(-35, 5, 70, 90);
+
+  // Car body — BIG & BOLD
+  ctx.fillStyle = car.boosting ? '#ff66ff' : car.color;
+  ctx.fillRect(-30, -50, 60, 100);
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(-30, -50, 60, 100);
+
+  // White stripes
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(-5, -45, 10, 30);
+  ctx.fillRect(-5, 0, 10, 30);
+
+  // Windshield
+  ctx.fillStyle = '#222';
+  ctx.fillRect(-20, -25, 40, 25);
+
+  // Wheels — clearly visible
+  ctx.fillStyle = '#111';
+  ctx.fillRect(-38, -40, 12, 25);
+  ctx.fillRect(26, -40, 12, 25);
+  ctx.fillRect(-38, 15, 12, 25);
+  ctx.fillRect(26, 15, 12, 25);
+
+  // Boost flame
+  if (car.boosting) {
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath();
+    ctx.moveTo(-15, 50);
+    ctx.lineTo(0, 75 + Math.random()*10);
+    ctx.lineTo(15, 50);
+    ctx.fill();
+    ctx.fillStyle = '#ff4400';
+    ctx.beginPath();
+    ctx.moveTo(-8, 50);
+    ctx.lineTo(0, 65 + Math.random()*5);
+    ctx.lineTo(8, 50);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// ========== GAME UPDATE ==========
+function update(dt) {
+  if (!gameRunning) return;
+
+  // Time
+  const elapsed = Date.now() - startTime;
+  const m = Math.floor(elapsed / 60000);
+  const s = Math.floor((elapsed % 60000) / 1000);
+  timeDisplay.textContent = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+
+  // Input
+  const up = keys['ArrowUp'];
+  const down = keys['ArrowDown'];
+  const left = keys['ArrowLeft'];
+  const right = keys['ArrowRight'];
+  const space = keys['Space'];
+  const shift = keys['ShiftLeft'] || keys['ShiftRight'];
+
+  // Speed
+  if (up) car.speed += car.accel;
+  if (down) car.speed -= car.accel * 1.5;
+  car.speed *= car.friction;
+
+  // Off-track slowdown
+  if (!onTrack(car.x, car.z)) car.speed *= 0.95;
+
+  // Drift
+  car.drifting = space && Math.abs(car.speed) > 3;
+  if (car.drifting) {
+    driftText.classList.add('on');
+    car.boost = Math.min(100, car.boost + dt * 30);
+  } else {
+    driftText.classList.remove('on');
+  }
+
+  // Boost
+  car.boosting = shift && car.boost > 10;
+  if (car.boosting) {
+    car.boost -= dt * 40;
+    car.maxSpeed = 15;
+  } else {
+    car.maxSpeed = 10;
+  }
+  boostFill.style.width = car.boost + '%';
+
+  // Steering
+  let turn = 0;
+  if (left) turn = -car.turnSpeed;
+  if (right) turn = car.turnSpeed;
+
+  if (car.drifting) {
+    car.driftAngle += turn * 2.5;
+    car.driftAngle *= 0.94;
+    car.angle += turn * 0.6;
+  } else {
+    car.driftAngle *= 0.9;
+    car.angle += turn * Math.min(1, car.speed / 5);
+  }
+
+  // Limit speed
+  car.speed = Math.max(-3, Math.min(car.maxSpeed, car.speed));
+
+  // Move
+  const speedMult = car.boosting ? 1.4 : 1;
+  car.x += Math.sin(car.angle + car.driftAngle * 0.3) * car.speed * speedMult * dt * 60;
+  car.z += Math.cos(car.angle + car.driftAngle * 0.3) * car.speed * speedMult * dt * 60;
+
+  // Obstacle hit
+  obstacles.forEach(obs => {
+    if (Math.hypot(car.x - obs.x, car.z - obs.z) < obs.size + 25) {
+      car.speed *= 0.5;
+    }
+  });
+
+  // Lap counting
+  const nearStart = Math.hypot(car.x - track[0].x, car.z - track[0].z) < 70;
+  const idx = findNearestIndex(car.x, car.z);
+  if (nearStart && car.checkpoint === track.length - 1) {
+    car.lap++;
+    car.checkpoint = 0;
+    lapDisplay.textContent = car.lap;
+    if (car.lap > 3) {
+      alert('🏆 YOU WON THE RACE!');
+      car.lap = 1;
+      startTime = Date.now();
+    }
+  } else if (idx === (car.checkpoint + 1) % track.length) {
+    car.checkpoint = idx;
+  }
+
+  // Update speed display
+  speedNum.textContent = Math.floor(Math.abs(car.speed) * 25);
+}
+
+// ========== INPUT & START ==========
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+});
+document.addEventListener('keyup', e => keys[e.code] = false);
+
+startBtn.addEventListener('click', () => {
+  startScreen.style.display = 'none';
+  makeTrack();
+  car.x = track[0].x + 50;
+  car.z = track[0].z;
+  car.angle = track[0].angle + Math.PI;
+  startTime = Date.now();
+  gameRunning = true;
+});
+
+// ========== MAIN LOOP ==========
+let lastTime = performance.now();
+function loop(t) {
+  const dt = Math.min(0.05, (t - lastTime) / 1000);
+  lastTime = t;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
